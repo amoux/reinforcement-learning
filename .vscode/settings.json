@@ -1,4 +1,5 @@
 {
     "python.pythonPath": "/home/ego/anaconda3/envs/ego/bin/python",
-    "editor.fontSize": 12
+    "editor.fontSize": 13,
+    "python.linting.enabled": false
 }
