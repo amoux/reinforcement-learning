@@ -1,5 +1,5 @@
 import enum
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import gym
 import gym.spaces
@@ -11,6 +11,14 @@ from .data_utils import Prices
 
 DEFAULT_BARS_COUNT = 10
 DEFAULT_COMMISSION_PERC = 0.1
+
+
+def load_prices_from_files(data_dir: str) -> Dict[str, Prices]:
+    prices = {
+        file: data_utils.load_relative(file)
+        for file in data_utils.price_files(data_dir)
+    }
+    return prices
 
 
 class Actions(enum.Enum):
@@ -40,18 +48,22 @@ class InternalState:
         do_reward_on_close: bool = False,
         do_switch_on_volumes: bool = True,
     ) -> None:
-        """
-        :param bars: count of bars that we padd in the observation.
-        :param commission: percentage of the stock price that the
-            agent needs to "pay" to the broker on buying and selling
-            stock.
-        :param do_reset_on_close: TODO: finish adding documentation.
+        """Internal representation of the environment's functionality.
+
+        :param bars: number of bars to include in the observation space.
+        :param commission: percentage of the stock price that the agent
+            needs to "pay" to the broker on buying and selling stock.
+        :param do_reset_on_close: TODO: <Finish Adding Documentation>
         :param do_reward_on_close: switch between the two reward schemes. If
             true, the agent will receive a reward only on the `close` action.
             Otherwise, it uses a small reward every bar; corresponding to price
             movement during that bar.
         :param do_switch_on_volumes: switch on volumes in observations.
         """
+        assert isinstance(bars, int)
+        assert isinstance(commission, float)
+        assert bars > 0
+        assert commission >= 0.0
         self.bars = bars
         self.commission = commission
         self.do_reset_on_close = do_reset_on_close
@@ -67,10 +79,17 @@ class InternalState:
         raise NotImplementedError
 
     def encode_self(self) -> np.ndarray:
+        """Encoding including prices, with optional volumes and two numbers
+        indicating the presence of a bought share and position profit."""
         raise NotImplementedError
 
     def current_close_price(self) -> float:
-        """Compute the real closing price for the current bar."""
+        """Calculate the current bar's close price.
+
+        Prices passed to the `InternalState` have the relative ratios to the open
+        price. This representation "can" help the agent learn price patterns that
+        are independent of actual price value.
+        """
         opening = self._prices.open[self._offset]
         closing = self._prices.close[self._offset]
         real_price = opening * (1.0 + closing)
@@ -85,6 +104,15 @@ class InternalState:
         self._offset = offset
 
     def step(self, action: Actions) -> Tuple[float, Any]:
+        """Compute the reward in a percentage and indication of the episode ending.
+
+        If the agent decides to buy a share, the state takes the latter to pay the
+        commission. Usually, the agent can execute an order on a different price
+        called; `price slippage.` If we have a position and the agent's request is
+        to `close,` then; the commission is paid again, done flag updated, and if
+        the `do_reset_on_close` is `True` - collect the final reward for the whole
+        position and update the state.
+        """
         assert isinstance(action, Actions)
         reward = 0.0
         done = False
@@ -102,6 +130,8 @@ class InternalState:
                 )
             self.maybe_has_position = False
             self.current_open_price = 0.0
+        # In the following, we modify the current offset
+        # and give the reward for the last bar movement.
         self._offset += 1
         prev_close = close
         close = self.current_close_price()
@@ -117,7 +147,7 @@ class VectorDataState(InternalState):
 
     @property
     def shape(self) -> Tuple[int, ...]:
-        # [h, l, c] * bars + position flag + rel_profit (since open)
+        # [h, l, c] * bars + position-flag + true-profit (since open)
         if self.do_switch_on_volumes:
             return (4 * self.bars + 1 + 1,)
         else:
@@ -159,6 +189,13 @@ class MatrixDataState(InternalState):
             return (5, self.bars)
 
     def encode_self(self) -> np.ndarray:
+        """Encode the prices in the state matrix.
+
+        - Based on the subsequent conditions
+          - Depending on the current offset
+          - Whether the agent needs volumes
+          - Whether the agent has free stock
+        """
         state = np.zeros(shape=self.shape, dtype=np.float32)
         bars = self.bars - 1
         state[0] = self._prices.high[self._offset - bars : self._offset + 1]
@@ -181,17 +218,17 @@ class StockEnv(gym.Env):
 
     def __init__(
         self,
-        prices: Prices,
-        data_state_type: str = "vector",
-        do_random_offsets_on_reset=True,
+        prices: Dict[str, Prices],
+        state_type: str = "vector",
         bars: int = 10,
         commission: float = 0.1,
         do_reset_on_close: bool = True,
         do_reward_on_close: bool = False,
         do_switch_on_volumes: bool = True,
+        do_random_offsets_on_reset: bool = True,
     ) -> None:
         self._prices = prices
-        if data_state_type:
+        if state_type == "matrix":
             self._state = MatrixDataState(
                 bars=bars,
                 commission=commission,
@@ -216,18 +253,24 @@ class StockEnv(gym.Env):
         self.seed()
 
     def close(self) -> None:
+        """Called on the environment's destruction to allocate resources."""
         pass
 
     def render(self, mode="human", close=False) -> None:
         pass
 
     def seed(self, seed=None) -> List[np.ndarray]:
+        """Gym's random number generator (adaptable to multiple instances)."""
         self.np_random, seed_0 = seeding.np_random(seed)
         seed_1 = seeding.hash_seed(seed_0 + 1) % 2 ** 31
         return [seed_0, seed_1]
 
     def reset(self) -> np.ndarray:
-        """Make selection of the instrument and it's offset reseting the state."""
+        """Make selection of the instrument and it's offset reseting the state.
+
+        This method has to handle the action chosen by the agent and return
+        the next `observation, reward, and done` flag.
+        """
         self._instrument = self.np_random.choice(list(self._prices.keys()))
         prices = self._prices[self._instrument]
         bars = self._state.bars
@@ -247,9 +290,6 @@ class StockEnv(gym.Env):
         return self_encoded_observation, reward, done, info
 
     @classmethod
-    def from_dir(cls, data_dir, **kwargs) -> "StockEnv":
-        prices = {
-            file: data_utils.load_relative(file)
-            for file in data_utils.price_files(data_dir)
-        }
+    def from_dir(cls, data_dir: str, **kwargs) -> "StockEnv":
+        prices = load_prices_from_files(data_dir=data_dir)
         return StockEnv(prices, **kwargs)
