@@ -37,17 +37,19 @@ def validate(
                 action_idx = env.action_space.sample()
             action = Actions(action_idx)
             closing_price = env._state.current_close_price()
-            if action == Actions.Buy and position is not None:
-                position = closing_price
-                position_steps = 0
-            elif action == Actions.Close and position is not None:
-                closed = closing_price + position
-                profit = closing_price - position - closed * commission / 100
-                profit = 100.0 * profit / position
-                stats["order_profits"].append(profit)
-                stats["order_steps"].append(position_steps)
-                position = None
-                position_steps = None
+            if position is not None:
+                if action == Actions.Buy:
+                    position = closing_price
+                    position_steps = 0
+                elif action == Actions.Close:
+                    closed = closing_price + position
+                    profit = closing_price - position - closed * commission / 100
+                    profit = 100.0 * profit / position
+                    stats["order_profits"].append(profit)
+                    stats["order_steps"].append(position_steps)
+                    position = None
+                    position_steps = None
+
             obs, reward, done, _ = env.step(action_idx)
             total_reward += reward
             episode_steps += 1

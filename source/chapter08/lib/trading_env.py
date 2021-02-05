@@ -9,9 +9,6 @@ from gym.utils import seeding
 from . import data_utils
 from .data_utils import Prices
 
-DEFAULT_BARS_COUNT = 10
-DEFAULT_COMMISSION_PERC = 0.1
-
 
 def load_prices_from_files(data_dir: str) -> Dict[str, Prices]:
     prices = {
@@ -123,7 +120,7 @@ class InternalState:
             reward -= self.commission
         elif action == Actions.Close and self.maybe_has_position:
             reward -= self.commission
-            done != self.do_reset_on_close
+            done |= self.do_reset_on_close
             if self.do_reward_on_close:
                 reward += (
                     100.0 * (close - self.current_open_price) / self.current_open_price
@@ -224,7 +221,7 @@ class StockEnv(gym.Env):
         commission: float = 0.1,
         do_reset_on_close: bool = True,
         do_reward_on_close: bool = False,
-        do_switch_on_volumes: bool = True,
+        do_switch_on_volumes: bool = False,
         do_random_offsets_on_reset: bool = True,
     ) -> None:
         self._prices = prices
